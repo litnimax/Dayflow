@@ -10,6 +10,7 @@ extension OllamaProvider {
     let reasoning: String
     let title: String
     let summary: String
+    let detailedSummary: String
     let category: String
     let appSites: AppSites?
   }
@@ -17,6 +18,7 @@ extension OllamaProvider {
   private struct SummaryResponse: Codable {
     let reasoning: String
     let summary: String
+    let detailedSummary: String
     let category: String
     let appSites: AppSitesResponse?
 
@@ -28,6 +30,7 @@ extension OllamaProvider {
     enum CodingKeys: String, CodingKey {
       case reasoning
       case summary
+      case detailedSummary
       case category
       case appSites = "app_sites"
     }
@@ -121,6 +124,8 @@ extension OllamaProvider {
 
       \(promptSections.summary)
 
+      \(OllamaPromptDefaults.detailedSummaryBlock)
+
       CATEGORIES:
       Choose exactly one:
       \(categoriesSection)
@@ -141,15 +146,17 @@ extension OllamaProvider {
         3. Which category best fits based on the MAJORITY of time and focus?
         4. How did you structure the summary to capture the most important activities?
 
-      \(languageBlock)
-
       Return JSON:
       {
         "reasoning": "Your step-by-step thinking process",
         "summary": "Your 2-3 sentence summary",
+        "detailedSummary": "9:00 AM - 9:01 AM: Specific activity\\n9:01 AM - 9:02 AM: Next activity",
         "category": "\(allowedValues)",
         "app_sites": {"primary": "domain.com", "secondary": "domain.com"}
       }
+
+      \(languageBlock)
+      Apply the requested output language to BOTH summary and detailedSummary, even when the observations or examples are in another language. Keep timestamps, JSON keys and proper names unchanged.
       """
 
     let maxAttempts = 3
@@ -168,6 +175,11 @@ extension OllamaProvider {
         }
 
         let result = try parseJSONResponse(SummaryResponse.self, from: data)
+        guard !result.detailedSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+          throw NSError(
+            domain: "OllamaProvider", code: 12,
+            userInfo: [NSLocalizedDescriptionKey: "Missing detailedSummary activity log"])
+        }
 
         return (result, response)
       } catch {
@@ -183,7 +195,7 @@ extension OllamaProvider {
 
 
             PREVIOUS ATTEMPT FAILED — The response was invalid (error: \(error.localizedDescription)).
-            Respond with ONLY the JSON object described above. Ensure it contains "reasoning", "summary", "category", and "app_sites" fields.
+            Respond with ONLY the JSON object described above. Ensure it contains "reasoning", "summary", "detailedSummary", "category", and "app_sites" fields. The detailedSummary must be a nonempty timestamped activity log.
             """
       }
     }
@@ -278,6 +290,7 @@ extension OllamaProvider {
       reasoning: "Summary: \(summaryResult.reasoning) | Title: \(titleResult.reasoning)",
       title: titleResult.title,
       summary: summaryResult.summary,
+      detailedSummary: summaryResult.detailedSummary,
       category: summaryResult.category,
       appSites: appSites
     )
@@ -475,7 +488,10 @@ extension OllamaProvider {
           subcategory: previousCard.subcategory,
           title: merged.title,
           summary: merged.summary,
-          detailedSummary: previousCard.detailedSummary,
+          detailedSummary: [previousCard.detailedSummary, newCard.detailedSummary]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n"),
           distractions: previousCard.distractions,
           appSites: previousCard.appSites ?? newCard.appSites
         )

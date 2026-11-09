@@ -70,6 +70,11 @@ extension OllamaProvider {
   func callChatAPI(
     _ request: ChatRequest, operation: String, batchId: Int64? = nil, maxRetries: Int = 3
   ) async throws -> ChatResponse {
+    if let completion {
+      let content = try await completion(request, operation, batchId)
+      return ChatResponse(choices: [.init(message: .init(content: content))])
+    }
+
     guard let url = LocalEndpointUtilities.chatCompletionsURL(baseURL: endpoint) else {
       throw NSError(
         domain: "OllamaProvider", code: 15,

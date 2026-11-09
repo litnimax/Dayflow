@@ -37,6 +37,18 @@ enum OllamaPromptPreferences {
 }
 
 enum OllamaPromptDefaults {
+  static let detailedSummaryBlock = """
+    DETAILED SUMMARY:
+    - Write a chronological activity log in the detailedSummary field, separate from the short summary.
+    - Use one line per observed interval: "h:mm AM - h:mm AM: What happened".
+    - Preserve the supplied start and end times, including AM/PM and midnight transitions.
+    - Include every observation, including brief interruptions, with specific apps, pages, files and actions.
+    - Merge adjacent intervals only when they describe the same activity. Keep task and app changes visible.
+    - Do not invent activity for gaps or subdivide a coarse observation into made-up minute-by-minute events.
+    - Use first-person perspective without "I". Do not refer to "the user".
+    - Separate lines with JSON newline escapes (\\n). No heading or bullets inside this field.
+    """
+
   static let summaryBlock = """
           SUMMARY GUIDELINES:
           - Write in first person without using "I" (like a personal journal entry)

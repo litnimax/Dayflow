@@ -7,9 +7,11 @@ import AppKit
 import Foundation
 
 final class OllamaProvider {
+  typealias Completion = (ChatRequest, String, Int64?) async throws -> String
+
   let endpoint: String
+  let completion: Completion?
   private let injectedRuntimeConfiguration: OpenAICompatibleRuntimeConfiguration?
-  let screenshotInterval: TimeInterval = 10  // seconds between screenshots
   // Read persisted local settings
   var savedModelId: String {
     if let injectedRuntimeConfiguration {
@@ -70,13 +72,15 @@ final class OllamaProvider {
     return OllamaPromptPreferences.load()
   }
 
-  init(endpoint: String = "http://localhost:1234") {
+  init(endpoint: String = "http://localhost:1234", completion: Completion? = nil) {
     self.endpoint = endpoint
+    self.completion = completion
     self.injectedRuntimeConfiguration = nil
   }
 
   init(openAICompatible configuration: OpenAICompatibleRuntimeConfiguration) {
     self.endpoint = configuration.endpoint
+    self.completion = nil
     self.injectedRuntimeConfiguration = configuration
   }
 
@@ -135,7 +139,7 @@ final class OllamaProvider {
       subcategory: "",
       title: titleSummary.title,
       summary: titleSummary.summary,
-      detailedSummary: "",
+      detailedSummary: titleSummary.detailedSummary,
       distractions: nil,
       appSites: titleSummary.appSites
     )
