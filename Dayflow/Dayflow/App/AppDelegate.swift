@@ -18,9 +18,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     case timeline
   }
 
-  // Controls whether the app is allowed to terminate.
-  // Default is false so Cmd+Q/Dock/App menu quit will be cancelled
-  // and the app will continue running in the background.
+  // Tracks explicit termination requests from updates, onboarding and the menu bar.
+  // Ordinary macOS Quit requests are also allowed and receive the user_quit reason.
   static var allowTermination: Bool = false
 
   /// Why the app is about to quit, sent with `app_terminated`.
@@ -246,13 +245,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    if Self.allowTermination {
-      return .terminateNow
+    if !Self.allowTermination {
+      Self.permitTermination(reason: "user_quit")
     }
-    // Soft-quit: hide windows and remove Dock icon, but keep status item + background tasks
-    NSApp.hide(nil)
-    NSApp.setActivationPolicy(.accessory)
-    return .terminateCancel
+    return .terminateNow
   }
 
   // MARK: - Foreground Tracking
