@@ -13,22 +13,18 @@ import Sparkle
 final class UpdaterManager: NSObject, ObservableObject {
   static let shared = UpdaterManager()
 
-  private let userDriver = SilentUserDriver()
-  private lazy var updater: SPUUpdater = {
-    SPUUpdater(
-      hostBundle: .main,
-      applicationBundle: .main,
-      userDriver: userDriver,
-      delegate: self)
-  }()
+  // One interactive driver handles both manual and opt-in scheduled checks.
+  private lazy var controller = SPUStandardUpdaterController(
+    startingUpdater: false, updaterDelegate: self, userDriverDelegate: nil)
+  private var updater: SPUUpdater { controller.updater }
 
-  // Fallback interactive updater for cases requiring authorization/UI
-  private lazy var interactiveController: SPUStandardUpdaterController = {
-    SPUStandardUpdaterController(
-      startingUpdater: false,
-      updaterDelegate: self,
-      userDriverDelegate: nil)
-  }()
+  @Published var automaticallyChecksForUpdates = UpdatePreferences.automaticChecksEnabled() {
+    didSet {
+      UpdatePreferences.setAutomaticChecksEnabled(automaticallyChecksForUpdates)
+      updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates
+      updater.automaticallyDownloadsUpdates = false
+    }
+  }
 
   // Simple state for Settings UI
   @Published var isChecking = false
@@ -40,6 +36,10 @@ final class UpdaterManager: NSObject, ObservableObject {
 
   private override init() {
     super.init()
+    // Override old Sparkle opt-ins before it can schedule a check or resume a download.
+    UpdatePreferences.prepareForLaunch()
+    updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates
+    updater.automaticallyDownloadsUpdates = false
 
     // Print what Sparkle thinks the settings are *before* starting:
     print("[Sparkle] bundleId=\(Bundle.main.bundleIdentifier ?? "nil")")
@@ -63,6 +63,7 @@ final class UpdaterManager: NSObject, ObservableObject {
   }
 
   func checkForUpdates(showUI: Bool = false) {
+    guard showUI || automaticallyChecksForUpdates else { return }
     isChecking = true
     statusText = "Checking…"
     track(
@@ -71,9 +72,7 @@ final class UpdaterManager: NSObject, ObservableObject {
         "mode": showUI ? "manual" : "background"
       ])
     if showUI {
-      // Start UI controller on demand so it can present prompts as needed
-      interactiveController.startUpdater()
-      interactiveController.checkForUpdates(nil)
+      controller.checkForUpdates(nil)
     } else {
       // Trigger a background check immediately; the scheduler will also keep running
       updater.checkForUpdatesInBackground()
@@ -149,21 +148,6 @@ extension UpdaterManager: SPUUpdaterDelegate {
     }
   }
 
-  nonisolated func updater(
-    _ updater: SPUUpdater,
-    willInstallUpdateOnQuit item: SUAppcastItem,
-    immediateInstallationBlock immediateInstallHandler: @escaping () -> Void
-  ) -> Bool {
-    // Convert Sparkle's deferred "install on quit" into an immediate install
-    Task { @MainActor in
-      print("[Sparkle] Immediate install requested for update: \(item.versionString)")
-      AppDelegate.permitTermination(reason: "update_install")
-      immediateInstallHandler()
-      self.track("sparkle_install_immediate", self.props(for: item))
-    }
-    return true
-  }
-
   nonisolated func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
     Task { @MainActor in
       print("[Sparkle] Updater will relaunch application")
@@ -202,6 +186,7 @@ extension UpdaterManager: SPUUpdaterDelegate {
     print("[Sparkle] finished cycle: \(updateCheck) error=\(String(describing: error))")
     logger.debug("Sparkle cycle finished error=\(String(describing: error))")
     Task { @MainActor in
+      self.isChecking = false
       self.track(
         "sparkle_cycle_finished",
         [
@@ -234,8 +219,7 @@ extension UpdaterManager: SPUUpdaterDelegate {
   }
 
   nonisolated func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
-    // If silent install failed due to requiring interaction (auth, permission),
-    // fall back to interactive flow so the user can authorize.
+    // The standard user driver presents any authorization required for installation.
     let nsError = error as NSError
     let domain = nsError.domain
     let code = nsError.code
@@ -281,10 +265,7 @@ extension UpdaterManager: SPUUpdaterDelegate {
           "code": code,
           "needs_interaction": needsInteraction,
         ])
-      if needsInteraction {
-        // Trigger interactive updater; if a download already exists, Sparkle resumes and prompts
-        self.interactiveController.updater.checkForUpdates()
-      }
+
     }
   }
 

@@ -69,6 +69,7 @@ final class FlowSessionTimeline: ObservableObject {
   }
 
   private struct File: Codable {
+    var sessionID: String?
     var sessionStartedAt: Date
     var updatedAt: Date
     var entries: [Entry]
@@ -85,6 +86,7 @@ final class FlowSessionTimeline: ObservableObject {
   @Published private(set) var observations: [Observation] = []
   private(set) var breaks: [Span] = []
   private(set) var sessionStartedAt = Date()
+  private var sessionID: String?
   private(set) var updatedAt: Date?
   /// When the model last delivered a timeline (drives the once-a-minute ask).
   private(set) var lastModelUpdateAt: Date?
@@ -106,8 +108,14 @@ final class FlowSessionTimeline: ObservableObject {
   /// Called when the agent starts watching a session. Keeps what's on disk
   /// if it belongs to this same session (a relaunch or re-brief); otherwise
   /// starts empty.
-  func begin(sessionStartedAt started: Date) {
-    if let file = load(), abs(file.sessionStartedAt.timeIntervalSince(started)) < 5 {
+  func begin(sessionStartedAt started: Date, sessionID: String? = nil) {
+    let previous = load()
+    if let file = previous,
+      sessionID != nil
+        ? file.sessionID == sessionID
+        : abs(file.sessionStartedAt.timeIntervalSince(started)) < 1
+    {
+      self.sessionID = file.sessionID
       sessionStartedAt = file.sessionStartedAt
       entries = file.entries
       observations = file.observations
@@ -116,6 +124,15 @@ final class FlowSessionTimeline: ObservableObject {
       lastModelUpdateAt = file.entries.isEmpty ? nil : file.updatedAt
       return
     }
+    // Keep completed timelines when the next session starts.
+    if let previous, !previous.entries.isEmpty {
+      let archive = fileURL.deletingLastPathComponent().appendingPathComponent("flow-sessions")
+      try? FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+      let name = previous.sessionID ?? String(Int(previous.sessionStartedAt.timeIntervalSince1970))
+      try? FileManager.default.copyItem(
+        at: fileURL, to: archive.appendingPathComponent(name + ".json"))
+    }
+    self.sessionID = sessionID
     sessionStartedAt = started
     entries = []
     observations = []
@@ -287,11 +304,13 @@ final class FlowSessionTimeline: ObservableObject {
   /// doesn't stop a tick short. No model turn — we show what we have.
   func finish(at now: Date = Date()) {
     endBreak(at: now)
-    guard var last = entries.last, last.endedAt < now,
+    if var last = entries.last, last.endedAt < now,
       now.timeIntervalSince(last.endedAt) < 15 * 60
-    else { return }
-    last.endedAt = now
-    entries[entries.count - 1] = last
+    {
+      last.endedAt = now
+      entries[entries.count - 1] = last
+    }
+    entries = overlayBreaks(on: entries, until: now)
     save()
   }
 
@@ -588,7 +607,8 @@ final class FlowSessionTimeline: ObservableObject {
   private func save() {
     updatedAt = Date()
     let file = File(
-      sessionStartedAt: sessionStartedAt, updatedAt: updatedAt!, entries: entries,
+      sessionID: sessionID, sessionStartedAt: sessionStartedAt, updatedAt: updatedAt!,
+      entries: entries,
       observations: observations, breaks: breaks)
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601

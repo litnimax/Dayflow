@@ -20,6 +20,14 @@ final class FlowAgentSettings: ObservableObject {
 
   // MARK: Agent
 
+  enum Provider: String, CaseIterable, Identifiable {
+    case claude, codex
+    var id: String { rawValue }
+    var title: String { self == .claude ? "Claude · Haiku" : "GPT · Luna" }
+  }
+
+  @Published var provider: Provider { didSet { set(provider.rawValue, "flowLocalProvider") } }
+
   /// Master switch: off means sessions run with no screen watching at all.
   @Published var agentEnabled: Bool { didSet { set(agentEnabled, "flowAgentEnabled") } }
   /// Codex model for every turn (briefing and ticks).
@@ -70,8 +78,11 @@ final class FlowAgentSettings: ObservableObject {
 
   private init() {
     let d = UserDefaults.standard
+    provider =
+      d.string(forKey: "flowLocalProvider").flatMap(Provider.init(rawValue:))
+      ?? ((try? LLMProviderRoutingStore.load())?.primary == .claude ? .claude : .codex)
     agentEnabled = d.object(forKey: "flowAgentEnabled") as? Bool ?? true
-    model = d.string(forKey: "flowAgentModel").flatMap { $0.isEmpty ? nil : $0 } ?? "gpt-6-astra"
+    model = "gpt-6-luna"
     let effort = d.string(forKey: "flowAgentReasoning") ?? "low"
     reasoningEffort = Self.reasoningEfforts.contains(effort) ? effort : "low"
     let tick = d.double(forKey: "flowAgentTickSeconds")
@@ -130,7 +141,7 @@ final class FlowAgentSettings: ObservableObject {
   /// Back to the built-in values (keeps the nudge variant).
   func resetToDefaults() {
     agentEnabled = true
-    model = "gpt-6-astra"
+    model = "gpt-6-luna"
     reasoningEffort = "low"
     tickSeconds = 15
     screenshotHeight = 1080

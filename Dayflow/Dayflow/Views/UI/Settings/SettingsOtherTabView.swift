@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsOtherTabView: View {
   @ObservedObject var viewModel: OtherSettingsViewModel
   @ObservedObject var launchAtLoginManager: LaunchAtLoginManager
+  @ObservedObject private var updater = UpdaterManager.shared
+  @AppStorage(UpdatePreferences.automaticCLIUpdatesKey) private var automaticCLIUpdates = false
   @AppStorage(DayflowAppearance.storageKey) private var appearance: DayflowAppearance = .system
   @FocusState private var isOutputLanguageFocused: Bool
   @State private var appLanguage = AppLanguagePreferences.selection()
@@ -10,11 +12,47 @@ struct SettingsOtherTabView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsStyle.sectionSpacing) {
       appPreferencesSection
+      updatesSection
       outputLanguageSection
     }
   }
 
   // MARK: - App preferences
+
+  private var updatesSection: some View {
+    SettingsSection(title: String(localized: "Updates")) {
+      VStack(alignment: .leading, spacing: 0) {
+        SettingsRow(
+          label: String(localized: "Automatically check for updates"),
+          subtitle: String(
+            localized: "Off by default. Installing an update always asks for confirmation.")
+        ) {
+          SettingsToggle(isOn: $updater.automaticallyChecksForUpdates)
+        }
+        SettingsRow(
+          label: String(localized: "Automatically update Claude and Codex"),
+          subtitle: String(
+            localized:
+              "After a Dayflow version change, update configured CLI providers. Off by default.")
+        ) {
+          SettingsToggle(isOn: $automaticCLIUpdates)
+        }
+        SettingsRow(
+          label: String(localized: "Check manually"),
+          subtitle: String(localized: "Official updates may replace changes in this custom build."),
+          showsDivider: false
+        ) {
+          SettingsSecondaryButton(
+            title: String(localized: "Check for Updates"),
+            isDisabled: updater.isChecking,
+            action: { updater.checkForUpdates(showUI: true) })
+        }
+        if !updater.statusText.isEmpty {
+          Text(updater.statusText).font(.caption).foregroundStyle(.secondary)
+        }
+      }
+    }
+  }
 
   private var appPreferencesSection: some View {
     SettingsSection(

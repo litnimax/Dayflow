@@ -2,9 +2,7 @@
 //  FlowNativeState.swift
 //  Dayflow
 //
-//  Thin native mirror of Flow session state. The backend (via the hosted web
-//  UI) owns the real data; the app only keeps enough to drive the desktop
-//  overlay and survive a relaunch mid-session.
+//  Locally persisted Flow session state shared by the native UI and overlay.
 //
 
 import Foundation
@@ -45,6 +43,10 @@ struct FlowNativeSnapshot: Codable, Equatable {
   var goals: [String]?
   /// The same tasks with ids, for the agent's goal tracking.
   var goalTasks: [FlowGoalTask]?
+  var completedTasks: [FlowGoalTask]?
+  var sessionID: String?
+  var sessionEndedAt: Int?
+  var nudgeCount: Int?
 
   static let idle = FlowNativeSnapshot()
 
