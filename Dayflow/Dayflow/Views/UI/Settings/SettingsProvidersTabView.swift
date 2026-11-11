@@ -34,6 +34,9 @@ struct SettingsProvidersTabView: View {
       currentConfigurationSection
       connectionHealthSection
       failoverRoutingSection
+      SettingsSection(title: "Flow", subtitle: "A separate model for focus sessions.") {
+        FlowProviderPicker()
+      }
 
       if viewModel.currentProvider == .gemini {
         geminiModelSection

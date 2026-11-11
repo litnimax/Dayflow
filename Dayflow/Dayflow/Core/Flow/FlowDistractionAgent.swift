@@ -2,22 +2,8 @@
 //  FlowDistractionAgent.swift
 //  Dayflow
 //
-//  Real distraction detection for Flow sessions. Each session gets one
-//  conversation with the model: an initial briefing with the user's
-//  goals, session length, and alert style, then a screenshot every ~15 seconds
-//  with the current time and time remaining. The model replies with a strict
-//  one-object JSON verdict; nudges drive the desktop overlay and
-//  on-task/off-task flips drive the session's distraction log (via
-//  FlowSessionMirror → web UI → backend).
-//
-//  Which model does the watching follows the provider the user picked for
-//  Dayflow itself (see `Engine`): their own `codex` CLI (streaming for the
-//  first turn to capture the thread id, then `codex exec resume <id> --image
-//  <shot>` per tick), their own `claude` CLI (a resumable session that Reads
-//  each screenshot), or Dayflow Pro (a stateless backend call per tick that
-//  carries the briefing and the recent turns). Other providers aren't
-//  supported yet and the agent says so instead of starting.
-//
+//  A local Claude/Codex conversation watches screenshots during a focus session.
+//  Tasks, timeline and session controls are owned by the native app.
 
 import AppKit
 import Combine
@@ -61,67 +47,36 @@ final class FlowDistractionAgent: ObservableObject {
     let timeline: [FlowSessionTimeline.ModelItem]?
   }
 
-  /// What runs the conversation, picked from the user's primary provider
-  /// when a session starts.
+  /// Independent of the card provider; selected in Flow settings.
   private enum Engine: Equatable {
     case codex
     case claude
-    case dayflow
 
-    static func current() -> Engine? {
-      switch (try? LLMProviderRoutingStore.load())?.primary {
-      case .chatGPT: return .codex
+    @MainActor static func current() -> Engine? {
+      switch FlowAgentSettings.shared.provider {
+      case .codex: return .codex
       case .claude: return .claude
-      case .dayflow: return .dayflow
-      default: return nil
       }
     }
 
-    /// Codex and Claude keep the session timeline as a file they edit in
-    /// place; Dayflow Pro has no file system, so it answers inline.
-    var editsTimelineFile: Bool { self != .dayflow }
+    /// Both CLIs keep the session timeline in their restricted workspace.
+    var editsTimelineFile: Bool { true }
 
     var label: String {
       switch self {
       case .codex: return "Codex"
       case .claude: return "Claude"
-      case .dayflow: return "Dayflow Pro"
       }
     }
   }
 
   /// Claude's own model alias: small and fast, since a turn runs every tick.
   private static let claudeModel = "haiku"
-  /// Past turns (text only, never the screenshots) resent to the backend on
-  /// each Dayflow Pro tick so the model can see a pattern across checks.
-  private static let dayflowHistoryTurns = 12
-
-  private struct BackendTurn: Codable, Sendable {
-    let role: String
-    let content: String
-  }
-
-  private struct BackendCheckRequest: Encodable {
-    let briefing: String
-    let history: [BackendTurn]
-    let message: String
-    let image_base64: String?
-    let want_timeline: Bool
-  }
-
-  private struct BackendCheckResponse: Decodable {
-    let text: String
-  }
-
   private let runner = ChatCLIProcessRunner()
 
   private var engine: Engine = .codex
-  /// Codex thread id, Claude session id, or a local id for Dayflow Pro
-  /// (which keeps no conversation on the server). Nil until briefed.
+  /// Codex thread id or Claude session id. Nil until briefed.
   private var conversationId: String?
-  /// Dayflow Pro only: the briefing and recent turns resent on each tick.
-  private var backendBriefing = ""
-  private var backendHistory: [BackendTurn] = []
   private var tickTimer: Timer?
   private var tickInFlight = false
   private var paused = false
@@ -260,7 +215,7 @@ final class FlowDistractionAgent: ObservableObject {
     // Before anything can bail out: a session the agent never watches must
     // still drop the previous session's log, or its summary would show it.
     // The same session on a re-brief or relaunch keeps what's been logged.
-    timeline.begin(sessionStartedAt: sessionStartedAt)
+    timeline.begin(sessionStartedAt: sessionStartedAt, sessionID: snapshot.sessionID)
     guard settings.agentEnabled else {
       statusLine = "Disabled"
       return
@@ -292,8 +247,8 @@ final class FlowDistractionAgent: ObservableObject {
     guard let engine = Engine.current() else {
       print("[FlowAgent] Not starting: the primary provider can't run the Flow agent")
       appendTranscript(
-        "Flow's screen watching needs ChatGPT (Codex), Claude or Dayflow Pro as your provider.")
-      statusLine = "Needs Codex, Claude or Dayflow Pro"
+        "Flow's screen watching needs Claude or Codex configured in Flow settings.")
+      statusLine = "Needs Codex or Claude"
       AnalyticsService.shared.capture("flow_agent_unsupported_provider")
       return
     }
@@ -313,22 +268,6 @@ final class FlowDistractionAgent: ObservableObject {
     print("[FlowAgent] Starting \(engine.label) conversation (style: \(alertStyle.rawValue))")
     let modelName = modelLabel
     statusLine = rebrief ? "Re-briefing \(modelName)…" : "Briefing \(modelName)…"
-
-    // Dayflow Pro keeps nothing on the server, so there's no briefing turn:
-    // the briefing rides along with every tick instead.
-    if engine == .dayflow {
-      guard Self.dayflowCredentials() != nil else {
-        appendTranscript("Couldn't start the agent: not signed in to Dayflow Pro.")
-        statusLine = "Sign in to Dayflow Pro"
-        AnalyticsService.shared.capture("flow_agent_start_failed", ["engine": "dayflow"])
-        cleanupWorkDirectory()
-        return
-      }
-      backendBriefing = prompt
-      backendHistory = []
-      finishStart(generation: gen, sessionId: UUID().uuidString, reply: "", error: nil)
-      return
-    }
 
     tickInFlight = true
     let model = settings.model
@@ -449,8 +388,6 @@ final class FlowDistractionAgent: ObservableObject {
       Task.detached(priority: .utility) { ClaudeSessionCleanup(sessionID: id).cleanup() }
     }
     conversationId = nil
-    backendBriefing = ""
-    backendHistory = []
     paused = false
     pendingNotes = []
     lastReportedOffTask = false
@@ -631,8 +568,6 @@ final class FlowDistractionAgent: ObservableObject {
     let front = FlowSessionTimeline.frontmostApp()
     let display = cachedCaptureDisplay
     let engine = self.engine
-    let briefing = backendBriefing
-    let history = backendHistory
 
     Task.detached(priority: .utility) {
       var replyText: String?
@@ -682,13 +617,7 @@ final class FlowDistractionAgent: ObservableObject {
           } else {
             errorText = result.failureMessage(toolName: "Claude CLI")
           }
-        case .dayflow:
-          let image = try Data(contentsOf: shotURL).base64EncodedString()
-          replyText = try await Self.backendCheck(
-            BackendCheckRequest(
-              briefing: briefing, history: history, message: prompt, image_base64: image,
-              want_timeline: askTimeline),
-            timeout: timeout)
+
         }
       } catch {
         errorText = error.localizedDescription
@@ -770,12 +699,6 @@ final class FlowDistractionAgent: ObservableObject {
     consecutiveFailures = 0
     stats.checkSeconds += seconds
     appendTranscript(reply)
-    if engine == .dayflow {
-      backendHistory.append(BackendTurn(role: "user", content: prompt))
-      backendHistory.append(BackendTurn(role: "assistant", content: reply))
-      let limit = Self.dayflowHistoryTurns * 2
-      if backendHistory.count > limit { backendHistory.removeFirst(backendHistory.count - limit) }
-    }
 
     let objects = Self.jsonObjects(in: reply)
     guard let first = objects.first,
@@ -980,6 +903,9 @@ final class FlowDistractionAgent: ObservableObject {
     let extra = settings.extraInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
     if !extra.isEmpty {
       prompt += "\n\nADDITIONAL INSTRUCTIONS\n" + extra
+    }
+    if let language = LLMOutputLanguagePreferences.languageInstruction(forJSON: true) {
+      prompt += "\n\n" + language
     }
     return prompt
   }
@@ -1206,7 +1132,6 @@ final class FlowDistractionAgent: ObservableObject {
     switch engine {
     case .codex: return "\(settings.model), \(settings.reasoningEffort)"
     case .claude: return "Claude \(Self.claudeModel)"
-    case .dayflow: return "Dayflow Pro"
     }
   }
 
@@ -1214,7 +1139,6 @@ final class FlowDistractionAgent: ObservableObject {
     switch engine {
     case .codex: return "codex"
     case .claude: return "claude"
-    case .dayflow: return "dayflow"
     }
   }
 
@@ -1223,53 +1147,6 @@ final class FlowDistractionAgent: ObservableObject {
   private static func conversationWasLost(_ error: String) -> Bool {
     error.contains("no rollout found") || error.contains("thread/resume")
       || error.contains("No conversation found")
-  }
-
-  // MARK: - Dayflow Pro
-
-  private nonisolated static func dayflowCredentials() -> (endpoint: String, token: String)? {
-    let token = DayflowAuthManager.storedSessionToken()?
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let token, !token.isEmpty,
-      let endpoint = DayflowBackendConfiguration.endpoint(
-        legacySavedEndpoint: DayflowEndpointPreferences.load())
-    else { return nil }
-    let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-      .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    return (trimmed, token)
-  }
-
-  /// One stateless check: briefing, recent turns, this tick's message and
-  /// screenshot in; the model's raw reply out.
-  private nonisolated static func backendCheck(
-    _ payload: BackendCheckRequest, timeout: TimeInterval
-  ) async throws -> String {
-    guard let credentials = dayflowCredentials(),
-      let url = URL(string: "\(credentials.endpoint)/v1/dayflow/flow-check")
-    else {
-      throw NSError(
-        domain: "FlowAgent", code: -3,
-        userInfo: [NSLocalizedDescriptionKey: "Not signed in to Dayflow Pro"])
-    }
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.timeoutInterval = timeout
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
-    request.setValue("Bearer \(credentials.token)", forHTTPHeaderField: "Authorization")
-    request.httpBody = try JSONEncoder().encode(payload)
-
-    let (data, response) = try await URLSession.shared.data(for: request)
-    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-    guard (200...299).contains(status) else {
-      let body = String(data: data, encoding: .utf8) ?? ""
-      throw NSError(
-        domain: "FlowAgent", code: status,
-        userInfo: [
-          NSLocalizedDescriptionKey: "Dayflow Pro check failed (\(status)): \(body.prefix(200))"
-        ])
-    }
-    return try JSONDecoder().decode(BackendCheckResponse.self, from: data).text
   }
 
   private static func formatMinutes(_ minutes: Int) -> String {

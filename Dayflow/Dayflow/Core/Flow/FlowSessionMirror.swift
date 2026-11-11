@@ -2,10 +2,8 @@
 //  FlowSessionMirror.swift
 //  Dayflow
 //
-//  Holds the native mirror of Flow session state and decides what the desktop
-//  overlay shows. State changes arrive from the hosted web UI over the bridge;
-//  overlay pill actions are relayed back to the web UI (which owns talking to
-//  the backend).
+//  Owns the locally persisted Flow session and drives the desktop overlay.
+//  The optional bridge is retained for legacy integrations, not session control.
 //
 
 import AppKit
@@ -63,19 +61,33 @@ final class FlowSessionMirror: ObservableObject {
     // states that no longer make sense (an expired timed session).
     var restored = FlowNativeSnapshot.loadPersisted()
     let now = Int(Date().timeIntervalSince1970)
-    if restored.phase != .idle, let endsAt = restored.sessionEndsAt, endsAt <= now {
-      restored = .idle
+    if restored.phase == .active || restored.phase == .onBreak,
+      let endsAt = restored.sessionEndsAt, endsAt <= now
+    {
+      restored.phase = .ended
+      restored.sessionEndedAt = endsAt
+      restored.breakEndsAt = nil
+      restored.persist()
     }
     snapshot = restored
+    if let started = restored.sessionStartedAt {
+      FlowSessionTimeline.shared.begin(
+        sessionStartedAt: Date(timeIntervalSince1970: Double(started)),
+        sessionID: restored.sessionID)
+      if restored.phase == .ended, let ended = restored.sessionEndedAt {
+        FlowSessionTimeline.shared.finish(at: Date(timeIntervalSince1970: Double(ended)))
+      }
+    }
     armDeadlineTimer()
-    if restored.phase == .active {
+    if restored.phase == .active || restored.phase == .onBreak {
       // Relaunched mid-session: the old Codex conversation is gone, start a
       // fresh one with the same session facts.
       FlowDistractionAgent.shared.start(with: restored)
+      if restored.phase == .onBreak { FlowDistractionAgent.shared.pause() }
     }
   }
 
-  // MARK: - Updates from the web UI
+  // MARK: - Session state
 
   func apply(_ newSnapshot: FlowNativeSnapshot) {
     let previous = snapshot
@@ -96,9 +108,11 @@ final class FlowSessionMirror: ObservableObject {
           "always_on": newSnapshot.alwaysOn,
         ])
     case (_, .onBreak):
+      FlowSessionTimeline.shared.beginBreak()
       showBreak()
       FlowDistractionAgent.shared.pause()
     case (.onBreak, .active):
+      FlowSessionTimeline.shared.endBreak()
       breakOverlayTimer?.invalidate()
       showToast(String(localized: "Break's over. Back to it!"))
       FlowDistractionAgent.shared.resume()
@@ -109,11 +123,14 @@ final class FlowSessionMirror: ObservableObject {
     case (_, .idle), (_, .ended):
       isDistracted = false
       snoozeUntil = nil
-      FlowSessionTimeline.shared.finish()
-      FlowDistractionAgent.shared.stop()
-      if case (_, .idle) = (previous.phase, newSnapshot.phase), !overlay.isDemo {
-        overlay = .hidden
+      if previous.phase == .active || previous.phase == .onBreak {
+        let ended = newSnapshot.sessionEndedAt.map { Date(timeIntervalSince1970: Double($0)) }
+        FlowSessionTimeline.shared.finish(at: ended ?? Date())
       }
+      FlowDistractionAgent.shared.stop()
+      breakOverlayTimer?.invalidate()
+      toastTimer?.invalidate()
+      overlay = .hidden
     default:
       break
     }
@@ -211,6 +228,8 @@ final class FlowSessionMirror: ObservableObject {
     AnalyticsService.shared.capture(
       "flow_agent_nudge", ["alert_style": snapshot.alertStyle.rawValue])
     nudgeStreak += 1
+    snapshot.nudgeCount = (snapshot.nudgeCount ?? 0) + 1
+    snapshot.persist()
     overlay = .nudge(message: message, escalated: nudgeStreak >= 2)
   }
 
@@ -218,6 +237,7 @@ final class FlowSessionMirror: ObservableObject {
   /// (completed by Flow), and the creature celebrates unless it's quiet mode.
   func agentCompletedGoals(_ goals: [FlowGoalTask]) {
     guard snapshot.phase == .active, !goals.isEmpty else { return }
+    completeTasks(ids: Set(goals.map(\.id)))
     webBridge?.sendEvent("tasksCompleted", payload: ["ids": goals.map(\.id)])
     AnalyticsService.shared.capture("flow_agent_goal_completed", ["count": goals.count])
     guard snapshot.alertStyle != .quiet else { return }
@@ -299,31 +319,74 @@ final class FlowSessionMirror: ObservableObject {
   /// Opens the Flow tab on the session setup screen (the early-bird card's
   /// "Start session").
   func requestStartSession() {
+    if !isSessionOn { apply(.idle) }
     openFlowTab()
-    if let webBridge {
-      webBridge.sendEvent("sessionControl", payload: ["action": "start"])
-    } else {
-      pendingStartSession = true
+  }
+
+  func startSession(titles: [String], minutes: Int, alertStyle: FlowAlertStyle) {
+    guard !isSessionOn else { return }
+    let tasks = titles.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }.map { FlowGoalTask(id: UUID().uuidString, title: $0) }
+    guard !tasks.isEmpty else { return }
+    var next = FlowNativeSnapshot()
+    next.phase = .active
+    next.sessionID = UUID().uuidString
+    next.alertStyle = alertStyle
+    next.sessionStartedAt = Int(Date().timeIntervalSince1970)
+    next.sessionEndsAt = next.sessionStartedAt! + max(1, minutes) * 60
+    next.goalTasks = tasks
+    next.goals = tasks.map(\.title)
+    next.completedTasks = []
+    next.nudgeCount = 0
+    apply(next)
+  }
+
+  func completeTasks(ids: Set<String>) {
+    guard isSessionOn else { return }
+    var next = snapshot
+    let completed = (next.goalTasks ?? []).filter { ids.contains($0.id) }
+    next.completedTasks = (next.completedTasks ?? []) + completed
+    next.goalTasks = (next.goalTasks ?? []).filter { !ids.contains($0.id) }
+    next.goals = next.goalTasks?.map(\.title)
+    apply(next)
+  }
+
+  func continueSession(minutes: Int = 10) {
+    guard snapshot.phase == .ended else { return }
+    if let ended = snapshot.sessionEndedAt {
+      FlowSessionTimeline.shared.beginBreak(at: Date(timeIntervalSince1970: Double(ended)))
+      FlowSessionTimeline.shared.endBreak()
     }
+    var next = snapshot
+    next.phase = .active
+    next.sessionEndsAt = Int(Date().timeIntervalSince1970) + max(1, minutes) * 60
+    next.sessionEndedAt = nil
+    next.breakEndsAt = nil
+    apply(next)
   }
 
   /// A session is running or on a break: the menu bar shows its Flow pill
   /// and session hero only while this holds.
   var isSessionOn: Bool { snapshot.phase == .active || snapshot.phase == .onBreak }
 
-  /// Break, resume and end from the menu bar hero. The web UI owns sessions,
-  /// so the press is relayed there with the break length picked; if the Flow
-  /// page isn't loaded there is nobody to act on it, and opening Flow is the
-  /// next best thing.
+  /// Controls work even when the Flow tab is closed.
   func menuBarControl(_ action: String, minutes: Int? = nil) {
-    var payload: [String: Any] = ["action": action]
-    if let minutes { payload["minutes"] = minutes }
-    AnalyticsService.shared.capture("flow_menu_bar_control", payload)
-    guard let webBridge else {
-      openFlowTab()
-      return
+    var next = snapshot
+    let now = Int(Date().timeIntervalSince1970)
+    switch action {
+    case "break" where snapshot.phase == .active:
+      next.phase = .onBreak
+      next.breakEndsAt = now + max(1, minutes ?? 5) * 60
+    case "resume" where snapshot.phase == .onBreak:
+      next.phase = .active
+      next.breakEndsAt = nil
+    case "end" where isSessionOn:
+      next.phase = .ended
+      next.sessionEndedAt = min(now, next.sessionEndsAt ?? now)
+      next.breakEndsAt = nil
+    default: return
     }
-    webBridge.sendEvent("sessionControl", payload: payload)
+    apply(next)
   }
 
   // MARK: - Deadlines
@@ -337,7 +400,7 @@ final class FlowSessionMirror: ObservableObject {
 
     var deadlines: [Date] = []
     let now = Date()
-    if snapshot.phase == .active, let endsAt = snapshot.sessionEndsAt {
+    if isSessionOn, let endsAt = snapshot.sessionEndsAt {
       deadlines.append(Date(timeIntervalSince1970: TimeInterval(endsAt)))
     }
     if snapshot.phase == .onBreak, let endsAt = snapshot.breakEndsAt {
@@ -356,35 +419,30 @@ final class FlowSessionMirror: ObservableObject {
     }
   }
 
-  private func handleDeadline() {
-    let now = Int(Date().timeIntervalSince1970)
+  func handleDeadline(at date: Date = Date()) {
+    let now = Int(date.timeIntervalSince1970)
 
     if let snoozeDeadline = snoozeUntil, snoozeDeadline <= Date() {
       snoozeUntil = nil
       // Still marked distracted after the snooze ran out → nudge again.
       if isDistracted, snapshot.phase == .active, snapshot.alertStyle != .quiet {
         nudgeStreak += 1
+        snapshot.nudgeCount = (snapshot.nudgeCount ?? 0) + 1
+        snapshot.persist()
         overlay = .nudge(
           message: String(localized: "Snooze is up — ready to get back to it?"),
           escalated: nudgeStreak >= 2)
       }
     }
 
-    if snapshot.phase == .active, let endsAt = snapshot.sessionEndsAt, endsAt <= now {
-      snapshot.phase = .ended
-      snapshot.persist()
+    if isSessionOn, let endsAt = snapshot.sessionEndsAt, endsAt <= now {
+      menuBarControl("end")
       overlay = .sessionEnded
-      FlowSessionTimeline.shared.finish()
-      FlowDistractionAgent.shared.stop()
       AnalyticsService.shared.capture("flow_session_natural_end")
     }
 
     if snapshot.phase == .onBreak, let endsAt = snapshot.breakEndsAt, endsAt <= now {
-      snapshot.phase = .active
-      snapshot.breakEndsAt = nil
-      snapshot.persist()
-      breakOverlayTimer?.invalidate()
-      showToast(String(localized: "Break's over. Back to it!"))
+      menuBarControl("resume")
     }
 
     armDeadlineTimer()

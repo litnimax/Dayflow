@@ -275,7 +275,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Build the SwiftPM CLI and place it next to the app executable.\n# env -i strips Xcode's SDK/arch variables, which confuse swift-build.\nset -euo pipefail\nCLI_DIR=\"${SRCROOT}/../tools/dayflow-cli\"\nif [ \"${CONFIGURATION}\" = \"Release\" ]; then\n  env -i DEVELOPER_DIR=\"${DEVELOPER_DIR}\" HOME=\"$HOME\" PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\" /usr/bin/swift build -c release --package-path \"$CLI_DIR\" --arch arm64 --arch x86_64\n  BIN=\"$CLI_DIR/.build/apple/Products/Release/dayflow\"\nelse\n  env -i DEVELOPER_DIR=\"${DEVELOPER_DIR}\" HOME=\"$HOME\" PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\" /usr/bin/swift build -c release --package-path \"$CLI_DIR\"\n  BIN=\"$CLI_DIR/.build/release/dayflow\"\nfi\nDEST_DIR=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\nDEST=\"$DEST_DIR/dayflow\"\nmkdir -p \"$DEST_DIR\"\ncp -f \"$BIN\" \"$DEST\"\n# Nested executables must match the app's signing identity or the app's\n# seal fails validation and RunningBoard refuses to launch it. Falls back\n# to adhoc (-) when signing is disabled.\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$DEST\"\n";
+			shellScript = "# Build the SwiftPM CLI and place it next to the app executable.\n# env -i strips Xcode's SDK/arch variables, which confuse swift-build.\nset -euo pipefail\nCLI_DIR=\"${SRCROOT}/../tools/dayflow-cli\"\nif [ \"${CONFIGURATION}\" = \"Release\" ]; then\n  env -i DEVELOPER_DIR=\"${DEVELOPER_DIR}\" HOME=\"$HOME\" PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\" /usr/bin/swift build -c release --package-path \"$CLI_DIR\" --arch arm64 --arch x86_64\n  BIN_DIR=$(env -i DEVELOPER_DIR=\"${DEVELOPER_DIR}\" HOME=\"$HOME\" PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\" /usr/bin/swift build -c release --package-path \"$CLI_DIR\" --arch arm64 --arch x86_64 --show-bin-path)\n  BIN=\"$BIN_DIR/dayflow\"\nelse\n  env -i DEVELOPER_DIR=\"${DEVELOPER_DIR}\" HOME=\"$HOME\" PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\" /usr/bin/swift build -c release --package-path \"$CLI_DIR\"\n  BIN_DIR=$(env -i DEVELOPER_DIR=\"${DEVELOPER_DIR}\" HOME=\"$HOME\" PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\" /usr/bin/swift build -c release --package-path \"$CLI_DIR\" --show-bin-path)\n  BIN=\"$BIN_DIR/dayflow\"\nfi\nDEST_DIR=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\nDEST=\"$DEST_DIR/dayflow\"\nmkdir -p \"$DEST_DIR\"\ncp -f \"$BIN\" \"$DEST\"\n# Nested executables must match the app's signing identity or the app's\n# seal fails validation and RunningBoard refuses to launch it. Falls back\n# to adhoc (-) when signing is disabled.\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$DEST\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -447,7 +447,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 140;
+				CURRENT_PROJECT_VERSION = 141;
 				DEVELOPMENT_ASSET_PATHS = "\"Dayflow/Preview Content\"";
 				DEVELOPMENT_TEAM = L75WYD8X4Y;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -462,7 +462,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.8.0;
+				MARKETING_VERSION = 2.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = teleportlabs.com.Dayflow;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -483,7 +483,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 140;
+				CURRENT_PROJECT_VERSION = 141;
 				DEVELOPMENT_ASSET_PATHS = "\"Dayflow/Preview Content\"";
 				DEVELOPMENT_TEAM = L75WYD8X4Y;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -498,7 +498,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.8.0;
+				MARKETING_VERSION = 2.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = teleportlabs.com.Dayflow;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -512,11 +512,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 140;
+				CURRENT_PROJECT_VERSION = 141;
 				DEVELOPMENT_TEAM = L75WYD8X4Y;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.1;
-				MARKETING_VERSION = 2.8.0;
+				MARKETING_VERSION = 2.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = teleportlabs.com.AmiTimeTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -530,11 +530,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 140;
+				CURRENT_PROJECT_VERSION = 141;
 				DEVELOPMENT_TEAM = L75WYD8X4Y;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.1;
-				MARKETING_VERSION = 2.8.0;
+				MARKETING_VERSION = 2.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = teleportlabs.com.AmiTimeTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -547,10 +547,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 140;
+				CURRENT_PROJECT_VERSION = 141;
 				DEVELOPMENT_TEAM = L75WYD8X4Y;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 2.8.0;
+				MARKETING_VERSION = 2.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = teleportlabs.com.AmiTimeUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -563,10 +563,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 140;
+				CURRENT_PROJECT_VERSION = 141;
 				DEVELOPMENT_TEAM = L75WYD8X4Y;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 2.8.0;
+				MARKETING_VERSION = 2.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = teleportlabs.com.AmiTimeUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
